@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0f1720">
+<title>Where Am I</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* Layout: full-screen map, one floating readout sheet docked to the bottom */
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --fg: #121a22; --muted: #5d6b78;
+    --line: #dde3e9; --accent: #1a73e8; --good: #1e8e3e; --warn: #c26a00; --bad: #c5221f;
+    --font: "Inter", system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1720; --panel: #17212b; --fg: #e8eef4; --muted: #93a3b3;
+      --line: #263441; --accent: #5ea1ff; --good: #4cc26f; --warn: #f0a640; --bad: #ff6b63;
+      color-scheme: dark;
+    }
+    .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9); }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.4 var(--font); overflow: hidden; }
+  #map { position: fixed; inset: 0; z-index: 0; background: var(--bg); }
+
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
+    background: var(--panel); border-top: 1px solid var(--line);
+    border-radius: 18px 18px 0 0; box-shadow: 0 -6px 24px rgba(0,0,0,.12);
+    padding: 14px max(16px, env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    display: grid; gap: 12px; max-width: 640px; margin: 0 auto;
+  }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.live { background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: pulse 1.8s infinite; }
+  .dot.err { background: var(--bad); }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .dot.live { animation: none; } }
+
+  .coords { font: 500 20px/1.2 var(--mono); letter-spacing: -.01em; word-break: break-all; font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .stat { min-width: 0; }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .stat .v { font: 500 15px/1.3 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-good { color: var(--good); } .acc-ok { color: var(--warn); } .acc-bad { color: var(--bad); }
+
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button, .btn {
+    font: 600 14px var(--font); border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--fg); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px; flex: 1 1 auto; justify-content: center;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .start {
+    position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    padding: 24px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left));
+  }
+  .start .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; max-width: 360px; display: grid; gap: 12px; text-align: center; }
+  .start h1 { margin: 0; font-size: 22px; }
+  .start p { margin: 0; color: var(--muted); }
+  .err-msg { color: var(--bad); font-size: 13px; }
+
+  .me { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.2), 0 2px 6px rgba(0,0,0,.35); }
+  .leaflet-control-attribution { font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="map" aria-label="Map showing your location"></div>
+
+<div class="start" id="start">
+  <div class="card">
+    <h1>Where Am I</h1>
+    <p>Shows your live GPS position on a map. Your location stays on this phone and is not sent anywhere.</p>
+    <button class="primary" id="startBtn">Start tracking</button>
+    <div class="err-msg" id="startErr" hidden></div>
+  </div>
+</div>
+
+<section class="sheet" aria-live="polite">
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">Waiting for location…</span></div>
+  <div class="coords" id="coords">—</div>
+  <div class="grid">
+    <div class="stat"><div class="k">Accuracy</div><div class="v" id="acc">—</div></div>
+    <div class="stat"><div class="k">Altitude</div><div class="v" id="alt">—</div></div>
+    <div class="stat"><div class="k">Speed</div><div class="v" id="spd">—</div></div>
+    <div class="stat"><div class="k">Heading</div><div class="v" id="hdg">—</div></div>
+  </div>
+  <div class="actions">
+    <button id="followBtn" aria-pressed="true">Follow me</button>
+    <button id="copyBtn">Copy</button>
+    <a class="btn" id="gmaps" href="#" target="_blank" rel="noopener">Google Maps</a>
+  </div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  let marker = null, circle = null, trail = L.polyline([], { color: '#1a73e8', weight: 4, opacity: .6 }).addTo(map);
+  let follow = true, last = null, firstFix = true, watchId = null;
+
+  // Stop following when the user drags the map themselves
+  map.on('dragstart', () => setFollow(false));
+  function setFollow(v) { follow = v; $('followBtn').setAttribute('aria-pressed', String(v)); if (v && last) map.setView([last.latitude, last.longitude], Math.max(map.getZoom(), 17)); }
+  $('followBtn').onclick = () => setFollow(!follow);
+
+  function setStatus(text, state) { $('statusText').textContent = text; $('dot').className = 'dot ' + (state || ''); }
+
+  function onPos(p) {
+    const c = p.coords; last = c;
+    const ll = [c.latitude, c.longitude];
+    if (!marker) {
+      marker = L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(map);
+      circle = L.circle(ll, { radius: c.accuracy, color: '#1a73e8', weight: 1, fillOpacity: .12 }).addTo(map);
+    } else { marker.setLatLng(ll); circle.setLatLng(ll).setRadius(c.accuracy); }
+    // Only add trail points for decent fixes that actually moved (> 3 m)
+    const pts = trail.getLatLngs();
+    if (c.accuracy < 50 && (!pts.length || map.distance(pts[pts.length - 1], ll) > 3)) trail.addLatLng(ll);
+
+    if (firstFix) { map.setView(ll, 17); firstFix = false; }
+    else if (follow) map.panTo(ll, { animate: true });
+
+    $('coords').textContent = c.latitude.toFixed(6) + ', ' + c.longitude.toFixed(6);
+    const acc = $('acc');
+    acc.textContent = '±' + Math.round(c.accuracy) + ' m';
+    acc.className = 'v ' + (c.accuracy <= 10 ? 'acc-good' : c.accuracy <= 50 ? 'acc-ok' : 'acc-bad');
+    $('alt').textContent = c.altitude != null ? Math.round(c.altitude) + ' m' : '—';
+    $('spd').textContent = c.speed != null && !isNaN(c.speed) ? (c.speed * 3.6).toFixed(1) + ' km/h' : '—';
+    $('hdg').textContent = c.heading != null && !isNaN(c.heading) ? Math.round(c.heading) + '°' : '—';
+    $('gmaps').href = 'https://www.google.com/maps?q=' + c.latitude + ',' + c.longitude;
+    setStatus('Live · updated ' + new Date(p.timestamp).toLocaleTimeString(), 'live');
+  }
+
+  function onErr(e) {
+    const msgs = {
+      1: 'Location permission was denied. Allow location for this site in your browser settings, then reload.',
+      2: 'Your position is unavailable. Turn on Location / GPS and try again.',
+      3: 'Getting a fix is taking a while. Move near a window or outdoors.'
+    };
+    setStatus(msgs[e.code] || e.message, e.code === 3 ? '' : 'err');
+    if (e.code === 1) { $('start').hidden = false; $('startErr').textContent = msgs[1]; $('startErr').hidden = false; }
+  }
+
+  function start() {
+    if (!('geolocation' in navigator)) { $('startErr').textContent = 'This browser does not support location.'; $('startErr').hidden = false; return; }
+    if (!window.isSecureContext) { $('startErr').textContent = 'Location only works when this page is opened over https:// (or localhost).'; $('startErr').hidden = false; return; }
+    $('start').hidden = true;
+    setStatus('Getting a GPS fix…');
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    // Keep the screen on while tracking, where supported
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {});
+  }
+  $('startBtn').onclick = start;
+
+  $('copyBtn').onclick = async () => {
+    if (!last) return;
+    const t = last.latitude.toFixed(6) + ', ' + last.longitude.toFixed(6);
+    try { await navigator.clipboard.writeText(t); $('copyBtn').textContent = 'Copied'; }
+    catch { const r = document.createRange(); r.selectNodeContents($('coords')); getSelection().removeAllRanges(); getSelection().addRange(r); }
+    setTimeout(() => $('copyBtn').textContent = 'Copy', 1500);
+  };
+
+  // Skip the start card if permission was already granted earlier
+  if (navigator.permissions) navigator.permissions.query({ name: 'geolocation' }).then(s => { if (s.state === 'granted') start(); }).catch(() => {});
+})();
+</script>
+</body>
+</html>
