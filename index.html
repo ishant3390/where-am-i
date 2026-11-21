@@ -6,19 +6,19 @@
 <meta name="theme-color" content="#0f1720">
 <title>Where Am I</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
 <style>
-  /* Layout: full-screen map, one floating readout sheet docked to the bottom */
+  /* Layout: full-screen map, zone banner pinned top, readout sheet docked bottom */
   :root {
     --bg: #f4f6f8; --panel: #ffffff; --fg: #121a22; --muted: #5d6b78;
-    --line: #dde3e9; --accent: #1a73e8; --good: #1e8e3e; --warn: #c26a00; --bad: #c5221f;
+    --line: #dde3e9; --accent: #1a73e8; --zone: #7b3fe4; --good: #1e8e3e; --warn: #c26a00; --bad: #c5221f;
     --font: "Inter", system-ui, -apple-system, sans-serif;
     --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1720; --panel: #17212b; --fg: #e8eef4; --muted: #93a3b3;
-      --line: #263441; --accent: #5ea1ff; --good: #4cc26f; --warn: #f0a640; --bad: #ff6b63;
+      --line: #263441; --accent: #5ea1ff; --zone: #b48cff; --good: #4cc26f; --warn: #f0a640; --bad: #ff6b63;
       color-scheme: dark;
     }
     .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9); }
@@ -38,10 +38,9 @@
   }
   .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot.live { background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: pulse 1.8s infinite; }
+  .dot.live { background: var(--good); animation: pulse 1.8s infinite; }
   .dot.err { background: var(--bad); }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
-  @media (prefers-reduced-motion: reduce) { .dot.live { animation: none; } }
 
   .coords { font: 500 20px/1.2 var(--mono); letter-spacing: -.01em; word-break: break-all; font-variant-numeric: tabular-nums; }
   .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -60,6 +59,32 @@
   button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   button:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+  /* Zone banner */
+  .zone {
+    position: fixed; z-index: 1000; top: calc(10px + env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right));
+    max-width: 616px; margin: 0 auto;
+    background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--good);
+    border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.14);
+    padding: 10px 12px; display: grid; gap: 8px;
+  }
+  .zone-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .zone-state { font-weight: 700; font-size: 15px; }
+  .zone-dist { font: 500 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--good); transition: width .4s; }
+  .zone-btns { display: flex; gap: 8px; }
+  .zone-btns button { padding: 6px 10px; font-size: 13px; }
+  .zone.near { border-left-color: var(--warn); } .zone.near .bar i { background: var(--warn); }
+  .zone.out { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .zone.out .zone-dist { color: #fff; }
+  .zone.out .bar { background: rgba(255,255,255,.35); } .zone.out .bar i { background: #fff; }
+  .zone.out button { color: #fff; border-color: rgba(255,255,255,.6); }
+  .zone.out.flash { animation: flash 1s steps(2) infinite; }
+  @keyframes flash { 50% { filter: brightness(1.25); } }
+  .zone.wait { border-left-color: var(--zone); }
+  @media (prefers-reduced-motion: reduce) { .dot.live, .zone.out.flash { animation: none; } }
+
   .start {
     position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
     background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -68,21 +93,39 @@
   .start .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; max-width: 360px; display: grid; gap: 12px; text-align: center; }
   .start h1 { margin: 0; font-size: 22px; }
   .start p { margin: 0; color: var(--muted); }
+  .start .zinfo { color: var(--fg); background: color-mix(in srgb, var(--zone) 12%, transparent); border-radius: 10px; padding: 10px; font-size: 14px; }
+  .start .zinfo b { font-family: var(--mono); font-weight: 500; }
+  .start a { color: var(--accent); font-size: 14px; }
   .err-msg { color: var(--bad); font-size: 13px; }
 
   .me { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.2), 0 2px 6px rgba(0,0,0,.35); }
+  .centre { width: 14px; height: 14px; background: var(--zone); border: 2px solid #fff; transform: rotate(45deg); box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .leaflet-control-attribution { font-size: 10px; }
 </style>
 </head>
 <body>
 <div id="map" aria-label="Map showing your location"></div>
 
+<section class="zone wait" id="zone" hidden aria-live="assertive">
+  <div class="zone-top">
+    <span class="zone-state" id="zoneState">Zone loaded</span>
+    <span class="zone-dist" id="zoneDist">waiting for GPS…</span>
+  </div>
+  <div class="bar" aria-hidden="true"><i id="zoneBar"></i></div>
+  <div class="zone-btns">
+    <button id="muteBtn" hidden>Silence alarm</button>
+    <button id="clearBtn">Remove zone</button>
+  </div>
+</section>
+
 <div class="start" id="start">
   <div class="card">
     <h1>Where Am I</h1>
-    <p>Shows your live GPS position on a map. Your location stays on this phone and is not sent anywhere.</p>
+    <p id="startText">Shows your live GPS position on a map. Your location stays on this phone and is not sent anywhere.</p>
+    <div class="zinfo" id="zinfo" hidden></div>
     <button class="primary" id="startBtn">Start tracking</button>
     <div class="err-msg" id="startErr" hidden></div>
+    <a href="qr.html">Make a zone QR code</a>
   </div>
 </div>
 
@@ -106,44 +149,128 @@
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([20, 0], 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; OpenStreetMap'
-  }).addTo(map);
+  const FT_PER_M = 3.28084;
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-  let marker = null, circle = null, trail = L.polyline([], { color: '#1a73e8', weight: 4, opacity: .6 }).addTo(map);
-  let follow = true, last = null, firstFix = true, watchId = null;
+  const map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
 
-  // Stop following when the user drags the map themselves
+  let marker = null, circle = null;
+  const trail = L.polyline([], { color: css('--accent'), weight: 4, opacity: .6 }).addTo(map);
+  let follow = true, last = null, firstFix = true, watchId = null, wakeLock = null;
+
+  // ---------- Zone from the QR link: ?lat=..&lng=..&r=<feet> ----------
+  let zone = null, zoneLayers = [];
+  (function readZone() {
+    const q = new URLSearchParams(location.search);
+    const lat = parseFloat(q.get('lat')), lng = parseFloat(q.get('lng')), ft = parseFloat(q.get('r'));
+    if (!(lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && ft > 0)) return;
+    zone = { lat, lng, ft, outside: false, outCount: 0, inCount: 0, muted: false };
+    zoneLayers = [
+      L.circle([lat, lng], { radius: ft / FT_PER_M, color: css('--zone'), weight: 2, dashArray: '6 6', fillOpacity: .08 }).addTo(map),
+      L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div class="centre"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }) }).addTo(map)
+    ];
+    map.fitBounds(zoneLayers[0].getBounds(), { padding: [40, 40] });
+    $('zone').hidden = false;
+    $('zoneState').textContent = 'Zone: ' + fmtFt(ft) + ' radius';
+    $('startText').textContent = 'This link has a zone. Tap Start to monitor it. An alarm sounds if you go outside.';
+    $('zinfo').hidden = false;
+    $('zinfo').innerHTML = 'Centre <b>' + lat.toFixed(6) + ', ' + lng.toFixed(6) + '</b><br>Radius <b>' + fmtFt(ft) + '</b><br><small>Keep this page open with the screen on. Phones pause GPS for web pages when locked.</small>';
+    $('startBtn').textContent = 'Start monitoring';
+  })();
+
+  function fmtFt(ft) { return ft >= 5280 ? (ft / 5280).toFixed(2) + ' mi' : Math.round(ft).toLocaleString() + ' ft'; }
+
+  function checkZone(ll, accM) {
+    if (!zone) return;
+    const dFt = map.distance([zone.lat, zone.lng], ll) * FT_PER_M;
+    const isOut = dFt > zone.ft;
+    // Two readings in a row before switching state, so one GPS jump doesn't trigger the alarm
+    if (isOut) { zone.outCount++; zone.inCount = 0; } else { zone.inCount++; zone.outCount = 0; }
+    if (!zone.outside && zone.outCount >= 2) { zone.outside = true; zone.muted = false; startAlarm(); }
+    if (zone.outside && zone.inCount >= 2) { zone.outside = false; stopAlarm(); }
+
+    const z = $('zone');
+    const pct = Math.min(100, dFt / zone.ft * 100);
+    $('zoneBar').style.width = pct + '%';
+    z.classList.remove('wait');
+    z.classList.toggle('out', zone.outside);
+    z.classList.toggle('flash', zone.outside && !zone.muted);
+    z.classList.toggle('near', !zone.outside && pct >= 80);
+    if (zone.outside) {
+      $('zoneState').textContent = 'OUT OF ZONE';
+      $('zoneDist').textContent = fmtFt(dFt - zone.ft) + ' outside · ' + fmtFt(dFt) + ' from centre';
+      document.title = '⚠ Out of zone';
+    } else {
+      $('zoneState').textContent = isOut ? 'Checking… may be outside' : 'Inside zone';
+      $('zoneDist').textContent = fmtFt(dFt) + ' from centre · ' + fmtFt(Math.max(0, zone.ft - dFt)) + ' left';
+      document.title = 'Where Am I';
+    }
+    $('muteBtn').hidden = !(zone.outside && !zone.muted);
+  }
+
+  // ---------- Alarm: beep + vibrate every 2 s while outside ----------
+  let audio = null, alarmTimer = null;
+  function unlockAudio() {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+      // A silent blip during the tap lets iOS play sound later
+      const o = audio.createOscillator(), g = audio.createGain(); g.gain.value = 0; o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + .01);
+    } catch {}
+  }
+  function beep() {
+    if (!audio) return;
+    const t = audio.currentTime;
+    [0, .25].forEach((d, i) => {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = 'square'; o.frequency.value = i ? 660 : 880;
+      g.gain.setValueAtTime(.0001, t + d); g.gain.exponentialRampToValueAtTime(.3, t + d + .02); g.gain.exponentialRampToValueAtTime(.0001, t + d + .2);
+      o.connect(g).connect(audio.destination); o.start(t + d); o.stop(t + d + .22);
+    });
+  }
+  function ring() { if (zone && zone.outside && !zone.muted) { beep(); if (navigator.vibrate) navigator.vibrate([400, 150, 400]); } }
+  function startAlarm() { stopAlarm(); ring(); alarmTimer = setInterval(ring, 2000); }
+  function stopAlarm() { clearInterval(alarmTimer); alarmTimer = null; if (navigator.vibrate) navigator.vibrate(0); }
+  $('muteBtn').onclick = () => { if (zone) { zone.muted = true; stopAlarm(); $('muteBtn').hidden = true; $('zone').classList.remove('flash'); } };
+  $('clearBtn').onclick = () => {
+    stopAlarm(); zoneLayers.forEach(l => map.removeLayer(l)); zoneLayers = []; zone = null;
+    $('zone').hidden = true; document.title = 'Where Am I';
+    history.replaceState(null, '', location.pathname);
+  };
+
+  // ---------- Tracking ----------
   map.on('dragstart', () => setFollow(false));
   function setFollow(v) { follow = v; $('followBtn').setAttribute('aria-pressed', String(v)); if (v && last) map.setView([last.latitude, last.longitude], Math.max(map.getZoom(), 17)); }
   $('followBtn').onclick = () => setFollow(!follow);
-
   function setStatus(text, state) { $('statusText').textContent = text; $('dot').className = 'dot ' + (state || ''); }
 
   function onPos(p) {
     const c = p.coords; last = c;
     const ll = [c.latitude, c.longitude];
     if (!marker) {
-      marker = L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(map);
-      circle = L.circle(ll, { radius: c.accuracy, color: '#1a73e8', weight: 1, fillOpacity: .12 }).addTo(map);
+      marker = L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), zIndexOffset: 1000 }).addTo(map);
+      circle = L.circle(ll, { radius: c.accuracy, color: css('--accent'), weight: 1, fillOpacity: .12 }).addTo(map);
     } else { marker.setLatLng(ll); circle.setLatLng(ll).setRadius(c.accuracy); }
-    // Only add trail points for decent fixes that actually moved (> 3 m)
     const pts = trail.getLatLngs();
     if (c.accuracy < 50 && (!pts.length || map.distance(pts[pts.length - 1], ll) > 3)) trail.addLatLng(ll);
 
-    if (firstFix) { map.setView(ll, 17); firstFix = false; }
-    else if (follow) map.panTo(ll, { animate: true });
+    if (firstFix) {
+      firstFix = false;
+      if (zone) map.fitBounds(L.latLngBounds([ll]).extend(zoneLayers[0].getBounds()), { padding: [60, 60], maxZoom: 18 });
+      else map.setView(ll, 17);
+    } else if (follow) map.panTo(ll, { animate: true });
 
     $('coords').textContent = c.latitude.toFixed(6) + ', ' + c.longitude.toFixed(6);
-    const acc = $('acc');
-    acc.textContent = '±' + Math.round(c.accuracy) + ' m';
-    acc.className = 'v ' + (c.accuracy <= 10 ? 'acc-good' : c.accuracy <= 50 ? 'acc-ok' : 'acc-bad');
-    $('alt').textContent = c.altitude != null ? Math.round(c.altitude) + ' m' : '—';
-    $('spd').textContent = c.speed != null && !isNaN(c.speed) ? (c.speed * 3.6).toFixed(1) + ' km/h' : '—';
+    const acc = $('acc'), accFt = c.accuracy * FT_PER_M;
+    acc.textContent = '±' + Math.round(accFt) + ' ft';
+    acc.className = 'v ' + (accFt <= 33 ? 'acc-good' : accFt <= 160 ? 'acc-ok' : 'acc-bad');
+    $('alt').textContent = c.altitude != null ? Math.round(c.altitude * FT_PER_M) + ' ft' : '—';
+    $('spd').textContent = c.speed != null && !isNaN(c.speed) ? (c.speed * 2.23694).toFixed(1) + ' mph' : '—';
     $('hdg').textContent = c.heading != null && !isNaN(c.heading) ? Math.round(c.heading) + '°' : '—';
     $('gmaps').href = 'https://www.google.com/maps?q=' + c.latitude + ',' + c.longitude;
     setStatus('Live · updated ' + new Date(p.timestamp).toLocaleTimeString(), 'live');
+    checkZone(ll, c.accuracy);
   }
 
   function onErr(e) {
@@ -156,6 +283,11 @@
     if (e.code === 1) { $('start').hidden = false; $('startErr').textContent = msgs[1]; $('startErr').hidden = false; }
   }
 
+  async function keepAwake() {
+    try { if (navigator.wakeLock && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && watchId != null) { keepAwake(); if (audio && audio.state === 'suspended') audio.resume(); } });
+
   function start() {
     if (!('geolocation' in navigator)) { $('startErr').textContent = 'This browser does not support location.'; $('startErr').hidden = false; return; }
     if (!window.isSecureContext) { $('startErr').textContent = 'Location only works when this page is opened over https:// (or localhost).'; $('startErr').hidden = false; return; }
@@ -163,10 +295,9 @@
     setStatus('Getting a GPS fix…');
     if (watchId != null) navigator.geolocation.clearWatch(watchId);
     watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-    // Keep the screen on while tracking, where supported
-    if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {});
+    keepAwake();
   }
-  $('startBtn').onclick = start;
+  $('startBtn').onclick = () => { unlockAudio(); start(); };
 
   $('copyBtn').onclick = async () => {
     if (!last) return;
@@ -176,8 +307,12 @@
     setTimeout(() => $('copyBtn').textContent = 'Copy', 1500);
   };
 
-  // Skip the start card if permission was already granted earlier
-  if (navigator.permissions) navigator.permissions.query({ name: 'geolocation' }).then(s => { if (s.state === 'granted') start(); }).catch(() => {});
+  // Without a zone, skip the start card if permission was already granted.
+  // With a zone, always wait for a tap so the alarm sound is allowed to play.
+  if (!zone && navigator.permissions) navigator.permissions.query({ name: 'geolocation' }).then(s => { if (s.state === 'granted') start(); }).catch(() => {});
+
+  // Test hook: simulate a position from the console, e.g. __fakePos(28.6, 77.2)
+  window.__fakePos = (lat, lng, acc = 5) => onPos({ coords: { latitude: lat, longitude: lng, accuracy: acc, altitude: null, speed: null, heading: null }, timestamp: Date.now() });
 })();
 </script>
 </body>

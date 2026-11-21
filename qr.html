@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1720">
+<title>Zone QR Maker</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* Layout: one centred column — location, radius, then the QR code */
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --fg: #121a22; --muted: #5d6b78;
+    --line: #dde3e9; --accent: #1a73e8; --good: #1e8e3e; --warn: #c26a00; --bad: #c5221f;
+    --font: "Inter", system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1720; --panel: #17212b; --fg: #e8eef4; --muted: #93a3b3;
+      --line: #263441; --accent: #5ea1ff; --good: #4cc26f; --warn: #f0a640; --bad: #ff6b63;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font);
+    padding: calc(20px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) calc(28px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  main { max-width: 480px; margin: 0 auto; display: grid; gap: 14px; }
+  header { display: grid; gap: 4px; }
+  h1 { margin: 0; font-size: 24px; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+  .card h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.live { background: var(--good); } .dot.err { background: var(--bad); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+  input {
+    font: 500 16px var(--mono); color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .acc { font: 500 13px var(--mono); }
+  .acc-good { color: var(--good); } .acc-ok { color: var(--warn); } .acc-bad { color: var(--bad); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  button, .btn {
+    font: 600 14px var(--font); border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--fg); text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .chips button { padding: 6px 12px; border-radius: 999px; font-size: 13px; }
+  .chips button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint { font-size: 13px; color: var(--muted); margin: 0; }
+  .hint.warn { color: var(--warn); }
+  .qr-wrap { display: grid; place-items: center; gap: 10px; }
+  /* QR always sits on white so every scanner can read it, in either theme */
+  canvas { width: min(100%, 300px); height: auto; border-radius: 10px; background: #fff; }
+  .link { font: 500 12px var(--mono); color: var(--muted); word-break: break-all; text-align: center; }
+  .actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .empty { color: var(--muted); text-align: center; padding: 28px 8px; border: 1px dashed var(--line); border-radius: 10px; }
+  footer { text-align: center; font-size: 13px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Zone QR Maker</h1>
+    <p>Pick a centre point and a radius. Scanning the QR code opens the tracker, which warns you when you leave the zone.</p>
+  </header>
+
+  <section class="card" aria-labelledby="locH">
+    <h2 id="locH">1 · Centre of the zone</h2>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">Not using GPS yet</span></div>
+    <button class="primary" id="gpsBtn">Use my current location</button>
+    <div class="row">
+      <label for="lat">Latitude<input id="lat" inputmode="decimal" placeholder="e.g. 28.613939" autocomplete="off"></label>
+      <label for="lng">Longitude<input id="lng" inputmode="decimal" placeholder="e.g. 77.209023" autocomplete="off"></label>
+    </div>
+    <p class="hint" id="accHint">GPS keeps refining for a few seconds. The fields keep the most accurate reading. You can also type coordinates yourself.</p>
+  </section>
+
+  <section class="card" aria-labelledby="radH">
+    <h2 id="radH">2 · Coverage radius</h2>
+    <label for="radius">Radius in feet<input id="radius" type="number" inputmode="numeric" min="1" step="1" value="100"></label>
+    <div class="chips" id="chips">
+      <button data-ft="50">50 ft</button>
+      <button data-ft="100">100 ft</button>
+      <button data-ft="250">250 ft</button>
+      <button data-ft="500">500 ft</button>
+      <button data-ft="1000">1000 ft</button>
+    </div>
+    <p class="hint" id="radHint"></p>
+  </section>
+
+  <section class="card" aria-labelledby="qrH">
+    <h2 id="qrH">3 · Your QR code</h2>
+    <div class="empty" id="empty">Set a centre point above and the QR code appears here.</div>
+    <div class="qr-wrap" id="qrWrap" hidden>
+      <canvas id="qr" width="600" height="680" aria-label="QR code for this zone"></canvas>
+      <div class="link" id="link"></div>
+    </div>
+    <div class="actions">
+      <button id="saveBtn" disabled>Save image</button>
+      <button id="copyBtn" disabled>Copy link</button>
+      <a class="btn" id="openBtn" href="./" aria-disabled="true">Test it</a>
+    </div>
+  </section>
+
+  <footer><a href="./">Open the tracker without a zone</a></footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const TRACKER = new URL('./', location.href).href;   // index.html next to this page
+  const FT_PER_M = 3.28084;
+  let best = null, userTyped = false, watchId = null, currentUrl = '';
+
+  function setStatus(t, s) { $('statusText').textContent = t; $('dot').className = 'dot ' + (s || ''); }
+
+  // ---- GPS: keep the most accurate fix until the person edits the fields ----
+  $('gpsBtn').onclick = () => {
+    if (!('geolocation' in navigator)) return setStatus('This browser does not support location.', 'err');
+    if (!window.isSecureContext) return setStatus('Location needs an https:// page.', 'err');
+    userTyped = false; best = null;
+    setStatus('Getting a GPS fix…');
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    $('gpsBtn').textContent = 'Refresh location';
+  };
+  function onPos(p) {
+    const c = p.coords;
+    if (!userTyped && (!best || c.accuracy <= best.accuracy)) {
+      best = c;
+      $('lat').value = c.latitude.toFixed(6);
+      $('lng').value = c.longitude.toFixed(6);
+      render();
+    }
+    const ft = Math.round((best || c).accuracy * FT_PER_M);
+    const cls = ft <= 33 ? 'acc-good' : ft <= 160 ? 'acc-ok' : 'acc-bad';
+    setStatus('', 'live');
+    $('statusText').innerHTML = 'Live · best accuracy <span class="acc ' + cls + '">±' + ft + ' ft</span>';
+    radiusHint();
+  }
+  function onErr(e) {
+    const m = { 1: 'Location permission was denied. Allow it for this site, or type coordinates below.', 2: 'Position unavailable. Turn on Location / GPS.', 3: 'Still waiting for a GPS fix…' };
+    setStatus(m[e.code] || e.message, e.code === 3 ? '' : 'err');
+  }
+  ['lat', 'lng'].forEach(id => $(id).addEventListener('input', () => { userTyped = true; render(); }));
+
+  // ---- Radius ----
+  function syncChips() {
+    const v = $('radius').value;
+    document.querySelectorAll('#chips button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ft === v)));
+  }
+  $('chips').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    $('radius').value = b.dataset.ft; syncChips(); radiusHint(); render();
+  });
+  $('radius').addEventListener('input', () => { syncChips(); radiusHint(); render(); });
+  function radiusHint() {
+    const r = parseFloat($('radius').value);
+    const accFt = best ? best.accuracy * FT_PER_M : 33;
+    const h = $('radHint');
+    if (r > 0 && r < accFt * 2) {
+      h.textContent = 'Phone GPS usually drifts by ' + Math.round(accFt) + ' ft or more. A radius this small may give false alarms. 100 ft or more works better.';
+      h.className = 'hint warn';
+    } else {
+      h.textContent = 'The alarm goes off when the phone is more than this distance from the centre.';
+      h.className = 'hint';
+    }
+  }
+
+  // ---- Build link + QR ----
+  function read() {
+    const lat = parseFloat($('lat').value), lng = parseFloat($('lng').value), r = parseFloat($('radius').value);
+    if (!(lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && r > 0)) return null;
+    return { lat, lng, r: Math.round(r) };
+  }
+  function render() {
+    const z = read();
+    const ok = !!z;
+    $('empty').hidden = ok; $('qrWrap').hidden = !ok;
+    $('saveBtn').disabled = !ok; $('copyBtn').disabled = !ok;
+    $('openBtn').setAttribute('aria-disabled', String(!ok));
+    if (!ok) { currentUrl = ''; $('openBtn').href = './'; return; }
+    const u = new URL(TRACKER);
+    u.searchParams.set('lat', z.lat.toFixed(6));
+    u.searchParams.set('lng', z.lng.toFixed(6));
+    u.searchParams.set('r', String(z.r));
+    currentUrl = u.href;
+    $('link').textContent = currentUrl;
+    $('openBtn').href = currentUrl;
+    drawQR(currentUrl, z.lat.toFixed(6) + ', ' + z.lng.toFixed(6) + '  ·  ' + z.r + ' ft radius');
+  }
+  function drawQR(text, caption) {
+    const qr = qrcode(0, 'M'); qr.addData(text); qr.make();
+    const n = qr.getModuleCount(), quiet = 4;
+    const cv = $('qr'), ctx = cv.getContext('2d');
+    const size = 600, cell = Math.floor(size / (n + quiet * 2)), off = Math.floor((size - cell * n) / 2);
+    cv.width = size; cv.height = size + 80;
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#000';
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.isDark(y, x)) ctx.fillRect(off + x * cell, off + y * cell, cell, cell);
+    ctx.fillStyle = '#121a22'; ctx.textAlign = 'center';
+    ctx.font = '600 26px Inter, system-ui, sans-serif';
+    ctx.fillText('Scan to monitor this zone', size / 2, size + 22);
+    ctx.font = '500 20px "JetBrains Mono", Menlo, monospace';
+    ctx.fillStyle = '#5d6b78';
+    ctx.fillText(caption, size / 2, size + 56);
+  }
+
+  $('saveBtn').onclick = () => {
+    const z = read(); if (!z) return;
+    const a = document.createElement('a');
+    a.href = $('qr').toDataURL('image/png');
+    a.download = 'zone-' + z.r + 'ft.png';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  $('copyBtn').onclick = async () => {
+    if (!currentUrl) return;
+    try { await navigator.clipboard.writeText(currentUrl); $('copyBtn').textContent = 'Copied'; }
+    catch { const r = document.createRange(); r.selectNodeContents($('link')); getSelection().removeAllRanges(); getSelection().addRange(r); }
+    setTimeout(() => $('copyBtn').textContent = 'Copy link', 1500);
+  };
+  $('openBtn').addEventListener('click', e => { if (!currentUrl) e.preventDefault(); });
+
+  syncChips(); radiusHint(); render();
+})();
+</script>
+</body>
+</html>
